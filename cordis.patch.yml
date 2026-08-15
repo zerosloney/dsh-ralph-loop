@@ -1,0 +1,21 @@
+# dsh-ralph-loop bundle patch: inserts the RALPH loop plugin into any profile
+# that lists this package in `dsh.profile.bundles`. The plugin needs the
+# harness core services (llm, tools, subprocess).
+- insert:
+    - id: ralph-loop
+      name: 'dsh-ralph-loop'
+      config:
+        # Hard upper bound on plan→test cycles per execution; the loop stops
+        # and reports accumulated lessons once reached.
+        maxCycles: 5
+        # Run the LLM reflection node on test failure (false = deterministic
+        # stderr excerpt, no model call).
+        autoReflectOnFailure: true
+        # Emit per-phase log lines through the harness logger.
+        verboseLogging: false
+        # LLM route for the RALPH nodes. Required at execution time; may be
+        # overridden per tool call.
+        provider: ''
+        model: ''
+        # Per-test-command deadline in ms.
+        testTimeoutMs: 120000
