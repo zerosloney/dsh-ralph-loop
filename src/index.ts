@@ -58,14 +58,18 @@ export interface Config extends RalphPluginConfig {}
 export default class RalphService extends Service {
   static inject = ["llm", "tools", "subprocess"];
 
+  // 全部字段带默认值：与 RalphPluginConfig（类型层面全 optional）及 cordis.patch.yml
+  // 缺省加载保持一致——schema 必填而 patch/类型 optional 会导致插件加载失败或契约矛盾。
   static Config: z<Config> = z.object({
-    maxCycles: z.number(),
-    autoReflectOnFailure: z.boolean(),
-    verboseLogging: z.boolean(),
-    provider: z.string(),
-    model: z.string(),
-    testTimeoutMs: z.number(),
-    sandboxDir: z.string(),
+    maxCycles: z.number().default(5),
+    autoReflectOnFailure: z.boolean().default(true),
+    verboseLogging: z.boolean().default(false),
+    provider: z.string().default(""),
+    model: z.string().default(""),
+    codegenMaxTokens: z.number().default(0),
+    testTimeoutMs: z.number().default(120_000),
+    sandboxDir: z.string().default(""),
+    totalTimeoutMs: z.number().default(30 * 60_000),
   });
 
   private readonly config: RalphPluginConfig;
@@ -101,7 +105,7 @@ export default class RalphService extends Service {
     const sandbox = new RalphSandbox(
       this.ctx.subprocess,
       this.config.testTimeoutMs,
-      this.config.sandboxDir,
+      this.config.sandboxDir || undefined,
     );
     await sandbox.init();
     try {

@@ -26,6 +26,25 @@ function jsonContent(value: unknown): ContentBlock[] {
 
 const toJson = (value: unknown): JsonValue => value as unknown as JsonValue;
 
+/**
+ * Tool-boundary view of the final state: stdout/stderr are tail-truncated so a
+ * 1MB test log can't blow up the LLM context. The full state stays available to
+ * service-level callers via `ctx.ralph.execute()`.
+ */
+function summarizeStateForTool(state: RalphState): RalphState {
+  if (!state.executionOutput) return state;
+  const tail = (text: string, max = 8_000): string =>
+    text.length <= max ? text : `…${text.slice(-max)}`;
+  return {
+    ...state,
+    executionOutput: {
+      ...state.executionOutput,
+      stdout: tail(state.executionOutput.stdout),
+      stderr: tail(state.executionOutput.stderr),
+    },
+  };
+}
+
 export function registerRalphTools(
   ctx: Context,
   _config: RalphPluginConfig,
@@ -39,7 +58,9 @@ export function registerRalphTools(
       task: { type: "string", required: true, description: "The goal the loop must achieve." },
       test_cmd: { type: "string", required: true, description: "Shell command that verifies the generated code (must exit 0 to pass)." },
       files: { type: "object", additionalProperties: true, description: "Initial files as { path: content }." },
-      max_cycles: { type: "integer", description: "Override the hard cycle cap." },
+      // DSL 只支持 enum/const 做值约束（minimum/maximum 会抛 unsupported schema），
+      // 1-20 的钳制用 enum 机器校验；引擎侧 MAX_CYCLES_CAP 再兜一层。
+      max_cycles: { type: "integer", enum: Array.from({ length: 20 }, (_, i) => i + 1), description: "Override the hard cycle cap (allowed 1-20)." },
       provider: { type: "string", description: "LLM provider route; defaults to plugin config." },
       model: { type: "string", description: "LLM model id; defaults to plugin config." },
     },
@@ -67,7 +88,7 @@ export function registerRalphTools(
         files,
         ...options,
       });
-      return toJson(state);
+      return toJson(summarizeStateForTool(state));
     },
   }));
 }

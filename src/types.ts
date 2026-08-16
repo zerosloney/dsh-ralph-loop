@@ -28,13 +28,15 @@ export interface RalphState {
   isPassed: boolean;
   /** Completed cycle count. */
   cycle: number;
+  /** True when the loop stopped due to the total deadline rather than gate/cycle-cap. */
+  timedOut?: boolean;
 }
 
 /** Plugin configuration (all fields optional; engine defaults apply). */
 export interface RalphPluginConfig {
   /** Hard upper bound on plan→test cycles. Default 5. */
   maxCycles?: number;
-  /** Reflect on failure via the LLM; false keeps a deterministic stderr excerpt. Default true. */
+  /** Run the LLM reflection node on test failure; false keeps a deterministic stderr excerpt. Default true. */
   autoReflectOnFailure?: boolean;
   /** Emit per-phase log lines through the harness logger. Default false. */
   verboseLogging?: boolean;
@@ -42,10 +44,15 @@ export interface RalphPluginConfig {
   provider?: string;
   /** LLM model id for the RALPH nodes. Required at execution time. */
   model?: string;
+  /** Handle 节点代码生成的 maxTokens 硬上限。0/缺省 = 不设（provider 默认）。
+   *  设小可防单轮生成失控，代价是截断的 JSON 会走失败周期自愈（多耗一轮）。 */
+  codegenMaxTokens?: number;
   /** Per-test-command deadline in ms. Default 120000. */
   testTimeoutMs?: number;
   /** Sandbox base directory; defaults to a fresh OS temp dir per execution. */
   sandboxDir?: string;
+  /** Total wall-clock budget for one full loop in ms. Default 1800000 (30min). */
+  totalTimeoutMs?: number;
 }
 
 /** Per-execute overrides layered over plugin config. */
@@ -53,6 +60,8 @@ export interface RalphExecuteOptions {
   maxCycles?: number;
   provider?: string;
   model?: string;
+  /** Total wall-clock budget override for this execution (ms). */
+  deadlineMs?: number;
 }
 
 export interface RalphStartEvent {

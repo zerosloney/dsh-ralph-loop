@@ -3,10 +3,15 @@
  * prompt assembly, and tolerant JSON extraction. No imports — unit-testable
  * and safe to run outside a harness context.
  */
-import type { RalphState } from "./types.js";
+import type { RalphExecutionOutput, RalphState } from "./types.js";
 
 export const DEFAULT_MAX_CYCLES = 5;
 export const DEFAULT_TEST_TIMEOUT_MS = 120_000;
+/** 单次调用允许的最大周期数上限：每周期 3-4 次 LLM 调用，无上限的 maxCycles 会被
+ *  自主 agent 的误调用变成配额黑洞（工具 schema 与引擎双重钳制）。 */
+export const MAX_CYCLES_CAP = 20;
+/** 整个闭环的总预算（wall clock），防止 llm.stream 挂起或超长循环把工具调用钉死。 */
+export const DEFAULT_TOTAL_TIMEOUT_MS = 30 * 60_000;
 
 export function initialState(
   task: string,
@@ -91,7 +96,22 @@ function balancedSlice(text: string, start: number): string {
   return text.slice(start);
 }
 
-/** Assemble the Plan-node prompt: task, current files, latest error, lessons. */
+/**
+ * Format the captured test output for prompts. Tail-truncated: test frameworks
+ * (pytest/jest/go test) print failure summaries at the END of stdout, and the
+ * stderr-only view of old code left the loop blind on those stacks.
+ */
+export function formatTestOutput(
+  output: RalphExecutionOutput | null,
+  maxChars = 4_000,
+): string {
+  if (!output) return "初始启动";
+  const tail = (s: string): string =>
+    s.length <= maxChars ? s : `…${s.slice(-maxChars)}`;
+  return `exit=${output.exitCode}\n--- stdout ---\n${tail(output.stdout)}\n--- stderr ---\n${tail(output.stderr)}`;
+}
+
+/** Assemble the Plan-node prompt: task, current files, latest outcome, lessons. */
 export function planPrompt(state: RalphState): string {
   const memory =
     state.lessonsLearned.length > 0
@@ -99,7 +119,7 @@ export function planPrompt(state: RalphState): string {
           .map((l, i) => `${i + 1}. ${l}`)
           .join("\n")}`
       : "";
-  return `任务: ${state.task}\n当前代码: ${JSON.stringify(state.files)}\n错误: ${state.executionOutput?.stderr || "初始启动"}${memory}\n请给出修改方案。`;
+  return `任务: ${state.task}\n当前代码: ${JSON.stringify(state.files)}\n上次执行:\n${formatTestOutput(state.executionOutput)}${memory}\n请给出修改方案。`;
 }
 
 /** Handle-node code generation prompt: plan in, strict file-JSON out. */
@@ -113,7 +133,7 @@ export function codegenPrompt(plan: string): { system: string; prompt: string } 
 
 /** Reflect-node prompt: root-cause analysis of the latest failure. */
 export function reflectPrompt(state: RalphState): string {
-  return `目标: ${state.task}\n错误: ${state.executionOutput?.stderr ?? ""}\n请分析失败直接原因。`;
+  return `目标: ${state.task}\n上次执行:\n${formatTestOutput(state.executionOutput)}\n请分析失败直接原因。`;
 }
 
 /** Learn-node prompt: distill one actionable negative constraint. */
@@ -123,6 +143,6 @@ export function learnPrompt(state: RalphState): string {
 
 /** Deterministic reflect fallback when autoReflectOnFailure is off. */
 export function mechanicalReflection(state: RalphState): string {
-  const stderr = (state.executionOutput?.stderr ?? "").trim();
-  return stderr.length > 500 ? `stderr 片段: ${stderr.slice(0, 500)}…` : `stderr: ${stderr}`;
+  const output = formatTestOutput(state.executionOutput, 500);
+  return output.length > 500 ? `${output.slice(0, 500)}…` : output;
 }

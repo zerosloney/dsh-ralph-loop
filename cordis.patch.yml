@@ -17,5 +17,9 @@
         # overridden per tool call.
         provider: ''
         model: ''
+        # Handle 节点代码生成的 maxTokens 硬上限；0 = 不设（provider 默认）。
+        codegenMaxTokens: 0
         # Per-test-command deadline in ms.
         testTimeoutMs: 120000
+        # Total wall-clock budget for one full loop in ms (30min default).
+        totalTimeoutMs: 1800000
