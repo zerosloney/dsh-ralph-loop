@@ -9,6 +9,12 @@
 import { Context, Service } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import { runRalphLoop } from "./engine.js";
+import {
+  DEFAULT_MAX_CYCLES,
+  DEFAULT_TEST_TIMEOUT_MS,
+  DEFAULT_TOTAL_TIMEOUT_MS,
+  MAX_CYCLES_CAP,
+} from "./pure.js";
 import { RalphSandbox } from "./sandbox.js";
 import { registerRalphTools } from "./tools.js";
 import type {
@@ -50,38 +56,107 @@ declare module "@deepseek-ai/cordis" {
 /** Plugin config: deployment defaults applied when a call omits the field. */
 export interface Config extends RalphPluginConfig {}
 
+const MAX_SAFE_CONFIG_INTEGER = Number.MAX_SAFE_INTEGER;
+
+/** Schema-side numeric contracts shared by config and deadline knobs. */
+const positiveInteger = (fallback: number) =>
+  z.natural().min(1).max(MAX_SAFE_CONFIG_INTEGER).default(fallback);
+const nonNegativeInteger = (fallback: number) =>
+  z.natural().max(MAX_SAFE_CONFIG_INTEGER).default(fallback);
+
+function checkedInteger(
+  name: string,
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum = MAX_SAFE_CONFIG_INTEGER,
+): number {
+  const resolved = value ?? fallback;
+  if (
+    !Number.isSafeInteger(resolved) ||
+    resolved < minimum ||
+    resolved > maximum
+  ) {
+    const range = minimum === 0 ? "a non-negative integer" : "a positive integer";
+    throw new TypeError(
+      `ralph: ${name} must be ${range} <= ${maximum}; got ${String(value)}`,
+    );
+  }
+  return resolved;
+}
+
+/**
+ * Cordis normally validates `Config` before constructing the service. Keep a
+ * second, fail-closed guard here because tests and embedders can instantiate a
+ * service directly and thereby bypass the static schema.
+ */
+function normalizeConfig(config: Config): Config {
+  if (config === null || typeof config !== "object" || Array.isArray(config)) {
+    throw new TypeError("ralph: config must be an object");
+  }
+  return {
+    ...config,
+    maxCycles: checkedInteger(
+      "maxCycles",
+      config.maxCycles,
+      DEFAULT_MAX_CYCLES,
+      1,
+      MAX_CYCLES_CAP,
+    ),
+    codegenMaxTokens: checkedInteger(
+      "codegenMaxTokens",
+      config.codegenMaxTokens,
+      0,
+      0,
+    ),
+    testTimeoutMs: checkedInteger(
+      "testTimeoutMs",
+      config.testTimeoutMs,
+      DEFAULT_TEST_TIMEOUT_MS,
+      1,
+    ),
+    totalTimeoutMs: checkedInteger(
+      "totalTimeoutMs",
+      config.totalTimeoutMs,
+      DEFAULT_TOTAL_TIMEOUT_MS,
+      1,
+    ),
+  };
+}
+
 /**
  * The RALPH loop as a DeepSeek Harness plugin. Needs the harness `llm` seam
  * for the five nodes, `subprocess` for the sandboxed test command, and
  * `tools` to register `run_ralph_loop`.
  */
 export default class RalphService extends Service {
-  static inject = ["llm", "tools", "subprocess"];
+  static inject = ["llm", "tools", "subprocess", "sandbox"];
 
   // 全部字段带默认值：与 RalphPluginConfig（类型层面全 optional）及 cordis.patch.yml
   // 缺省加载保持一致——schema 必填而 patch/类型 optional 会导致插件加载失败或契约矛盾。
   static Config: z<Config> = z.object({
-    maxCycles: z.number().default(5),
+    maxCycles: z.natural().min(1).max(MAX_CYCLES_CAP).default(DEFAULT_MAX_CYCLES),
     autoReflectOnFailure: z.boolean().default(true),
     verboseLogging: z.boolean().default(false),
     provider: z.string().default(""),
     model: z.string().default(""),
-    codegenMaxTokens: z.number().default(0),
-    testTimeoutMs: z.number().default(120_000),
+    codegenMaxTokens: nonNegativeInteger(0),
+    testTimeoutMs: positiveInteger(DEFAULT_TEST_TIMEOUT_MS),
     sandboxDir: z.string().default(""),
-    totalTimeoutMs: z.number().default(30 * 60_000),
+    totalTimeoutMs: positiveInteger(DEFAULT_TOTAL_TIMEOUT_MS),
   });
 
-  private readonly config: RalphPluginConfig;
+  private readonly config: Config;
 
   constructor(ctx: Context, config: Config) {
     super(ctx, "ralph");
-    this.config = config;
-    registerRalphTools(ctx, config, (params) =>
+    this.config = normalizeConfig(config);
+    registerRalphTools(ctx, this.config, (params) =>
       this.execute(params.task, params.testCmd, params.files ?? {}, {
         maxCycles: params.maxCycles,
         provider: params.provider,
         model: params.model,
+        signal: params.signal,
       }),
     );
   }
@@ -102,8 +177,18 @@ export default class RalphService extends Service {
     initialFiles: Record<string, string> = {},
     options: RalphExecuteOptions = {},
   ): Promise<RalphState> {
+    const safeOptions = {
+      ...options,
+      maxCycles: options.maxCycles === undefined
+        ? undefined
+        : checkedInteger("options.maxCycles", options.maxCycles, 1, 1, MAX_CYCLES_CAP),
+      deadlineMs: options.deadlineMs === undefined
+        ? undefined
+        : checkedInteger("options.deadlineMs", options.deadlineMs, 1, 1),
+    } satisfies RalphExecuteOptions;
     const sandbox = new RalphSandbox(
       this.ctx.subprocess,
+      this.ctx.sandbox,
       this.config.testTimeoutMs,
       this.config.sandboxDir || undefined,
     );
@@ -114,7 +199,7 @@ export default class RalphService extends Service {
         task,
         testCmd,
         initialFiles,
-        options,
+        safeOptions,
       );
     } finally {
       await sandbox.dispose();

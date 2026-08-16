@@ -1,6 +1,10 @@
 # dsh-ralph-loop bundle patch: inserts the RALPH loop plugin into any profile
 # that lists this package in `dsh.profile.bundles`. The plugin needs the
-# harness core services (llm, tools, subprocess).
+# harness core services (llm, tools, subprocess, sandbox).
+# The host profile must mount a Sandbox provider (normally the base bundle);
+# this patch inserts Ralph only and does not ship dsh-sandbox-local itself.
+# Missing/unavailable Sandbox, or confined.enforcement=partial, is fail-closed:
+# Ralph refuses to run the test command and never falls back to the raw argv.
 - insert:
     - id: ralph-loop
       name: 'dsh-ralph-loop'
@@ -22,4 +26,8 @@
         # Per-test-command deadline in ms.
         testTimeoutMs: 120000
         # Total wall-clock budget for one full loop in ms (30min default).
+        # The internal AbortSignal actively cancels in-flight LLM/subprocess
+        # work (for adapters that honor it) and returns timedOut=true; a
+        # caller AbortSignal keeps its original cancellation and emits no
+        # normal ralph/end event.
         totalTimeoutMs: 1800000

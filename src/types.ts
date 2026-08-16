@@ -62,6 +62,8 @@ export interface RalphExecuteOptions {
   model?: string;
   /** Total wall-clock budget override for this execution (ms). */
   deadlineMs?: number;
+  /** Caller-owned cooperative cancellation for this execution. */
+  signal?: AbortSignal;
 }
 
 export interface RalphStartEvent {
