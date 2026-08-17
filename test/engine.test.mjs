@@ -159,3 +159,31 @@ test("autoReflectOnFailure=false：失败反思零模型调用（确定性 stder
   // plan + codegen + learn = 3 次模型调用，反思被确定性路径跳过
   assert.equal(harness.prompts.length, 3);
 });
+
+test("空字符串的 per-call provider/model 视为未提供，回退插件配置", async () => {
+  const harness = scriptedHarness(["plan-1", '{"result.txt": "ok"}']);
+  const sandbox = scriptSandbox([0]);
+
+  const state = await runRalphLoop(
+    { ctx: harness.ctx, sandbox, config: { provider: "test", model: "test", maxCycles: 1 } },
+    "task",
+    "test",
+    {},
+    { provider: "", model: "" },
+  );
+
+  assert.equal(state.isPassed, true);
+});
+
+test("插件配置与 per-call 均未提供 provider/model 时立即报错", async () => {
+  const harness = scriptedHarness([]);
+  await assert.rejects(
+    () => runRalphLoop(
+      { ctx: harness.ctx, sandbox: scriptSandbox([0]), config: { maxCycles: 1 } },
+      "task",
+      "test",
+      {},
+    ),
+    /no LLM route configured/,
+  );
+});

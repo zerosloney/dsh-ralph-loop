@@ -57,8 +57,10 @@ export async function runRalphLoop(
     options.deadlineMs ?? config.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS,
   );
   const deadline = Date.now() + deadlineMs;
-  const provider = options.provider ?? config.provider;
-  const model = options.model ?? config.model;
+  // 空串与配置 schema 的 '' = 未设置 约定一致：per-call 传 '' 视为未提供，
+  // 回退插件配置；两者皆空才在下方报 no LLM route。
+  const provider = options.provider || config.provider;
+  const model = options.model || config.model;
   if (!provider || !model) {
     throw new Error(
       "ralph: no LLM route configured; set provider/model in plugin config or per-call options",
