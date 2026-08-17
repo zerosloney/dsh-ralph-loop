@@ -126,8 +126,10 @@ export function planPrompt(state: RalphState): string {
 export function codegenPrompt(plan: string): { system: string; prompt: string } {
   return {
     system:
-      "你是一个代码生成器。只输出一个 JSON 对象：键为文件路径，值为完整文件内容。不要输出任何其他文本、注释或 markdown 围栏。",
-    prompt: `根据方案: ${plan}，输出完整代码 JSON: {"path": "content"}`,
+      "你是一个代码生成器。只输出一个 JSON 对象：键为文件路径，值为完整文件内容（必须是纯字符串）。不要输出任何其他文本、注释或 markdown 围栏。禁止包裹结构：顶层必须直接是 {文件路径: 内容字符串}，任何嵌套对象都按解析失败处理。",
+    prompt: `根据方案: ${plan}，输出完整代码 JSON: {"path": "content"}。
+正确: {"src/main.py": "print('hi')"}
+错误: {"files": {"src/main.py": "print('hi')"}}（多了包裹层）、{"src/main.py": {"content": "print('hi')"}}（值不是字符串）`,
   };
 }
 

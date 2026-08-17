@@ -225,7 +225,10 @@ async function nodeHandle(
   let updatedFiles: Record<string, string> = { ...state.files };
   try {
     // codegenMaxTokens>0 时给 Handle 节点设硬上限（防单轮生成失控）；截断的 JSON
-    // 会走失败周期自愈，不中断 loop。
+    // 会走失败周期自愈（chatJson 把截断原因显式写进失败反馈），不中断 loop。
+    // retries=1 与 Plan/Reflect/Learn 对齐：瞬时网络错误退避一次而非烧掉整个失败
+    // 周期；截断/解析错误发生在 chatText 之外，不会被这里重试（确定性失败重试
+    // 无意义）。
     const generated = await chatJson(ctx, {
       provider,
       model,
@@ -234,14 +237,21 @@ async function nodeHandle(
       maxTokens: codegenMaxTokens && codegenMaxTokens > 0
         ? codegenMaxTokens
         : undefined,
-    }, 0, signal);
+    }, 1, signal);
     signal?.throwIfAborted();
     const entries = generated && typeof generated === "object"
       ? generated as Record<string, unknown>
       : {};
+    let appliedEntries = 0;
     for (const [filePath, content] of Object.entries(entries)) {
       if (typeof content !== "string") continue;
       updatedFiles[filePath] = content;
+      appliedEntries += 1;
+    }
+    // 形状完全不对（嵌套值/空对象/非对象顶层）时若继续，会用旧文件跑测试，Reflect
+    // 看不到任何"JSON 形状错了"的反馈，白烧一个周期——按解析失败进入自愈。
+    if (appliedEntries === 0) {
+      throw new Error("generated JSON has no {path: content}-shaped file entries");
     }
   } catch (error) {
     signal?.throwIfAborted();

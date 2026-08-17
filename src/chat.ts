@@ -44,6 +44,14 @@ function isAbortError(error: unknown): boolean {
   return candidate.name === "AbortError" || candidate.code === "ABORT_ERR";
 }
 
+/**
+ * Suffix marker appended when the provider's max-tokens cap truncates the
+ * generation, so downstream nodes (plan/reflection/lesson text) and the
+ * failure-cycle feedback can tell "truncated" apart from "malformed".
+ */
+export const MAX_TOKENS_TRUNCATION_MARKER =
+  "[ralph: model output was truncated by the max-tokens cap]";
+
 /** One assembled text completion from the harness LLM seam. transient LLM 错误（限流/网络）退避重试 retries 次后仍失败才上抛。 */
 export async function chatText(
   ctx: Context,
@@ -94,12 +102,18 @@ export async function chatText(
           `ralph: LLM 流式请求失败（${finish.kind} ${finish.failure.code}）：${finish.failure.message}`,
         );
       }
-      return assembler
+      // max-tokens 截断不抛错：Handle 的截断 JSON 仍走失败周期自愈（chatJson 会
+      // 把它改写为显式的截断错误）；Plan/Reflect/Learn 沿用截断文本，尾部标记
+      // 让截断这一事实对下游可见。
+      const text = assembler
         .blocks()
         .filter((block): block is TextBlock => block.type === "text")
         .map((block) => block.text)
         .join("")
         .trim();
+      return finish.kind === "max-tokens"
+        ? `${text}\n${MAX_TOKENS_TRUNCATION_MARKER}`
+        : text;
     } catch (error) {
       signal?.throwIfAborted();
       if (isAbortError(error)) throw error;
@@ -119,5 +133,15 @@ export async function chatJson(
 ): Promise<unknown> {
   const text = await chatText(ctx, opts, retries, signal);
   signal?.throwIfAborted();
-  return extractJson(text);
+  try {
+    return extractJson(text);
+  } catch (error) {
+    // 截断与格式错误的自愈策略不同（缩短输出 vs 修格式），失败反馈必须区分两者。
+    if (text.includes(MAX_TOKENS_TRUNCATION_MARKER)) {
+      throw new Error(
+        "ralph: model output was truncated by the max-tokens cap before the JSON completed",
+      );
+    }
+    throw error;
+  }
 }

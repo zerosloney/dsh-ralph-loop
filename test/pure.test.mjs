@@ -74,6 +74,17 @@ test("提示词携带任务/输出/教训", () => {
   assert.ok(learnPrompt(withFail).includes("避坑"));
 });
 
+test("codegen 提示词携带包裹结构反例（预防零有效条目周期）", () => {
+  const { system, prompt } = codegenPrompt("方案");
+  const combined = `${system}\n${prompt}`;
+  // 两种最常见的错误形状都有显式反例
+  assert.ok(combined.includes('{"files"'));
+  assert.ok(combined.includes('{"content"'));
+  // 值必须是纯字符串的正例约束
+  assert.ok(system.includes("纯字符串"));
+  assert.ok(prompt.includes("正确"));
+});
+
 test("MAX_CYCLES_CAP 与工具 schema 的 1-20 钳制一致", () => {
   assert.equal(MAX_CYCLES_CAP, 20);
 });
