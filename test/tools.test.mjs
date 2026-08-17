@@ -111,3 +111,18 @@ test("run_ralph_loop forwards the tool execution signal to the runner", async ()
 
   assert.strictEqual(receivedSignal, controller.signal);
 });
+
+test("run_ralph_loop bounds echoed task and test_cmd like every other field", async () => {
+  const fullState = state({
+    task: "t".repeat(20_000),
+    testCmd: "c".repeat(20_000),
+  });
+  const tool = captureTool(async () => fullState);
+
+  const result = await tool.execute({ task: "task", test_cmd: "npm test" });
+
+  assert.ok(result.task.length <= 8_000);
+  assert.match(result.task, /originalLength=20000/);
+  assert.ok(result.testCmd.length <= 8_000);
+  assert.match(result.testCmd, /originalLength=20000/);
+});

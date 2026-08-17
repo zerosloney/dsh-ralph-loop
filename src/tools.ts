@@ -31,6 +31,7 @@ const TOOL_MAX_FILE_CHARS = 16_000;
 const TOOL_MAX_TOTAL_FILE_CHARS = 64_000;
 const TOOL_MAX_PLAN_CHARS = 8_000;
 const TOOL_MAX_REFLECTION_CHARS = 8_000;
+const TOOL_MAX_TASK_CHARS = 8_000;
 const TOOL_MAX_LESSON_COUNT = 32;
 const TOOL_MAX_LESSON_CHARS = 4_000;
 const TOOL_MAX_TOTAL_LESSON_CHARS = 32_000;
@@ -188,6 +189,8 @@ function summarizeStateForTool(state: RalphState): RalphState {
     : null;
   return {
     ...state,
+    task: truncateText(state.task, TOOL_MAX_TASK_CHARS),
+    testCmd: truncateText(state.testCmd, TOOL_MAX_TASK_CHARS),
     files: summarizeFiles(state.files),
     executionOutput,
     reflection: state.reflection === null
