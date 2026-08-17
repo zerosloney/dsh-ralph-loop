@@ -10,6 +10,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type {
+  ConfinedArgv,
   SandboxPolicy,
   SandboxProvider,
 } from "@deepseek-ai/dsh-sandbox";
@@ -18,6 +19,42 @@ import { DEFAULT_TEST_TIMEOUT_MS } from "./pure.js";
 import type { RalphExecutionOutput } from "./types.js";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
+ * The seam's runner-failure classifier: exit status alone never proves a
+ * runner failure. Per each rule carried by {@link ConfinedArgv}: gate on
+ * `allowedExitCodes`, drop `informationalLines` by case-insensitive exact
+ * full-line equality, then match `fatalSignatures` case-insensitively as
+ * substrings of a remaining stderr line.
+ * @returns the matching stderr line when the runner itself failed before
+ *   executing the command; undefined when the exit reflects the command.
+ */
+function runnerFailureDetail(
+  confined: ConfinedArgv,
+  exitCode: number,
+  stderr: string,
+): string | undefined {
+  for (const rule of confined.runnerFailureRules) {
+    if (rule.allowedExitCodes && !rule.allowedExitCodes.includes(exitCode)) {
+      continue;
+    }
+    const informational = new Set(
+      (rule.informationalLines ?? []).map((line) => line.toLowerCase()),
+    );
+    const fatal = rule.fatalSignatures.map((signature) =>
+      signature.toLowerCase(),
+    );
+    const hit = stderr
+      .split(/\r?\n/)
+      .filter((line) => !informational.has(line.toLowerCase()))
+      .find((line) => {
+        const lowered = line.toLowerCase();
+        return fatal.some((signature) => lowered.includes(signature));
+      });
+    if (hit !== undefined) return hit.trim();
+  }
+  return undefined;
+}
 
 export class RalphSandbox {
   private dirPath: string | null = null;
@@ -151,11 +188,21 @@ export class RalphSandbox {
       }
       externalSignal?.throwIfAborted();
       if (controller.signal.aborted) return timeoutResult(handle);
-      return {
-        stdout: handle.collected.stdout?.readFrom(0).text ?? "",
-        stderr: handle.collected.stderr?.readFrom(0).text ?? "",
-        exitCode: outcome.exitCode ?? -1,
-      };
+      const stdout = handle.collected.stdout?.readFrom(0).text ?? "";
+      const stderr = handle.collected.stderr?.readFrom(0).text ?? "";
+      const exitCode = outcome.exitCode ?? -1;
+      // 运行器在执行命令前就失败（bwrap 无法建 namespace 等）是环境错误，不是测试
+      // 失败：按 confine 携带的规则识别并硬失败，绝不作为失败周期喂给自愈循环
+      // （否则 LLM 会对着 runner 诊断"修"不存在的代码缺陷烧完 maxCycles）。
+      if (exitCode !== 0) {
+        const runnerFailure = runnerFailureDetail(confined, exitCode, stderr);
+        if (runnerFailure !== undefined) {
+          throw new Error(
+            `ralph: sandbox runner failed before executing the test command: ${runnerFailure}`,
+          );
+        }
+      }
+      return { stdout, stderr, exitCode };
     } finally {
       // spawn 同步抛错或 done reject 都确保定时器被清，避免残留至超时触发。
       if (timer !== undefined) clearTimeout(timer);
@@ -175,13 +222,15 @@ export class RalphSandbox {
     if (path.isAbsolute(normalized) || normalized.startsWith("..")) {
       throw new Error(`ralph: refusing unsafe sandbox path: ${filePath}`);
     }
-    // Win32 保留设备名（含带扩展形式）与尾点/尾空格段：写入会 EINVAL 或被静默
-    // 重定向到设备，与穿越路径同等拒绝。
-    if (
-      /[. ]$/.test(normalized) ||
-      /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(normalized)
-    ) {
-      throw new Error(`ralph: refusing unsafe sandbox path: ${filePath}`);
+    // Win32 保留设备名（含带扩展形式）与尾点/尾空格按段生效：嵌套段（如 sub/con）
+    // 命中时写入会 EINVAL 或被静默重定向到设备，与穿越路径同等拒绝。
+    for (const segment of normalized.split(path.sep)) {
+      if (
+        /[. ]$/.test(segment) ||
+        /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment)
+      ) {
+        throw new Error(`ralph: refusing unsafe sandbox path: ${filePath}`);
+      }
     }
     return path.join(this.dir, normalized);
   }

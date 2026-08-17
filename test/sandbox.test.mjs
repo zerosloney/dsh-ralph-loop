@@ -13,17 +13,22 @@ function reader(text = "") {
   };
 }
 
-function handle(done) {
+function handle(done, { stdout = "", stderr = "" } = {}) {
   return {
     done,
     collected: {
-      stdout: reader(),
-      stderr: reader(),
+      stdout: reader(stdout),
+      stderr: reader(stderr),
     },
   };
 }
 
-function fakeSandbox({ prefix = ["fake-sandbox"], error, enforcement = "full" } = {}) {
+function fakeSandbox({
+  prefix = ["fake-sandbox"],
+  error,
+  enforcement = "full",
+  rules = [],
+} = {}) {
   const calls = [];
   return {
     calls,
@@ -34,7 +39,7 @@ function fakeSandbox({ prefix = ["fake-sandbox"], error, enforcement = "full" } 
         argv: [...prefix, ...argv],
         enforcement,
         denialSignatures: [],
-        runnerFailureRules: [],
+        runnerFailureRules: rules,
       };
     },
   };
@@ -250,6 +255,120 @@ test("dispose removes the temporary working directory", async () => {
   await sandbox.dispose();
 
   assert.equal(existsSync(directory), false);
+});
+
+test("runner failure rules classify a dead runner as an environment error", async () => {
+  const sandboxProvider = fakeSandbox({
+    rules: [{
+      allowedExitCodes: [1, 2],
+      informationalLines: ["bwrap: informational note"],
+      fatalSignatures: ["bwrap: creating new namespace failed"],
+    }],
+  });
+  const subprocess = {
+    spawn() {
+      return handle(Promise.resolve({ exitCode: 1, signal: null }), {
+        stderr: "bwrap: informational note\nbwrap: creating new namespace failed",
+      });
+    },
+  };
+  const sandbox = new RalphSandbox(subprocess, sandboxProvider, 1_000);
+
+  await sandbox.init();
+  try {
+    await assert.rejects(
+      () => sandbox.runBash("echo must-not-count-as-test"),
+      /runner failed before executing the test command: bwrap: creating new namespace failed$/,
+    );
+  } finally {
+    await sandbox.dispose();
+  }
+});
+
+test("a runner rule gated off by allowedExitCodes keeps the result a normal failure", async () => {
+  const sandboxProvider = fakeSandbox({
+    rules: [{ allowedExitCodes: [2], fatalSignatures: ["bwrap: creating new namespace failed"] }],
+  });
+  const subprocess = {
+    spawn() {
+      return handle(Promise.resolve({ exitCode: 1, signal: null }), {
+        stderr: "bwrap: creating new namespace failed",
+      });
+    },
+  };
+  const sandbox = new RalphSandbox(subprocess, sandboxProvider, 1_000);
+
+  await sandbox.init();
+  try {
+    const result = await sandbox.runBash("echo x");
+    assert.equal(result.exitCode, 1);
+    assert.ok(result.stderr.includes("bwrap: creating new namespace failed"));
+  } finally {
+    await sandbox.dispose();
+  }
+});
+
+test("informational lines are removed before fatal-signature matching", async () => {
+  const sandboxProvider = fakeSandbox({
+    rules: [{
+      informationalLines: ["BWRAP: CREATING NEW NAMESPACE FAILED"],
+      fatalSignatures: ["bwrap: creating new namespace failed"],
+    }],
+  });
+  const subprocess = {
+    spawn() {
+      return handle(Promise.resolve({ exitCode: 1, signal: null }), {
+        stderr: "bwrap: creating new namespace failed",
+      });
+    },
+  };
+  const sandbox = new RalphSandbox(subprocess, sandboxProvider, 1_000);
+
+  await sandbox.init();
+  try {
+    const result = await sandbox.runBash("echo x");
+    assert.equal(result.exitCode, 1);
+  } finally {
+    await sandbox.dispose();
+  }
+});
+
+test("stderr without a fatal signature keeps the result a normal test failure", async () => {
+  const sandboxProvider = fakeSandbox({
+    rules: [{ fatalSignatures: ["bwrap: creating new namespace failed"] }],
+  });
+  const subprocess = {
+    spawn() {
+      return handle(Promise.resolve({ exitCode: 1, signal: null }), {
+        stderr: "assertion failed: expected 1 to equal 2",
+      });
+    },
+  };
+  const sandbox = new RalphSandbox(subprocess, sandboxProvider, 1_000);
+
+  await sandbox.init();
+  try {
+    const result = await sandbox.runBash("npm test");
+    assert.equal(result.exitCode, 1);
+    assert.ok(result.stderr.includes("assertion failed"));
+  } finally {
+    await sandbox.dispose();
+  }
+});
+
+test("writeFile rejects reserved names and trailing dots in nested segments", async () => {
+  const sandbox = new RalphSandbox({}, fakeSandbox());
+
+  await sandbox.init();
+  try {
+    await assert.rejects(() => sandbox.writeFile("sub/con", "x"), /unsafe sandbox path/);
+    await assert.rejects(() => sandbox.writeFile("dir/nul.txt", "x"), /unsafe sandbox path/);
+    await assert.rejects(() => sandbox.writeFile("a./b", "x"), /unsafe sandbox path/);
+    await sandbox.writeFile("auxiliary/file.txt", "ok");
+    assert.equal(sandbox.hasWritten("auxiliary/file.txt"), true);
+  } finally {
+    await sandbox.dispose();
+  }
 });
 
 test("relative baseDir yields an absolute workspaceRoot", async () => {
