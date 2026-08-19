@@ -79,12 +79,54 @@ test("codegen 提示词携带包裹结构反例（预防零有效条目周期）
   const combined = `${system}\n${prompt}`;
   // 两种最常见的错误形状都有显式反例
   assert.ok(combined.includes('{"files"'));
-  assert.ok(combined.includes('{"content"'));
-  // 值必须是纯字符串的正例约束
-  assert.ok(system.includes("纯字符串"));
   assert.ok(prompt.includes("正确"));
 });
 
 test("MAX_CYCLES_CAP 与工具 schema 的 1-20 钳制一致", () => {
   assert.equal(MAX_CYCLES_CAP, 20);
 });
+
+test("applyContentPatch: 支持直接替换、搜索替换对象与 SEARCH/REPLACE 块", async () => {
+  const { applyContentPatch } = await import("../lib/pure.js");
+  const original = "function add(a, b) {\n  return a - b;\n}";
+
+  // 1. 直接字符串替换
+  assert.equal(
+    applyContentPatch(original, "function add(a, b) {\n  return a + b;\n}"),
+    "function add(a, b) {\n  return a + b;\n}",
+  );
+
+  // 2. { search, replace } 结构化对象
+  assert.equal(
+    applyContentPatch(original, { search: "return a - b;", replace: "return a + b;" }),
+    "function add(a, b) {\n  return a + b;\n}",
+  );
+
+  // 3. SEARCH/REPLACE 块格式
+  const diffBlock = `<<<<<<< SEARCH
+  return a - b;
+=======
+  return a + b;
+>>>>>>> REPLACE`;
+  assert.equal(
+    applyContentPatch(original, diffBlock),
+    "function add(a, b) {\n  return a + b;\n}",
+  );
+
+  // 4. 找不到 search 块抛错自愈
+  assert.throws(
+    () => applyContentPatch(original, { search: "missing target", replace: "new" }),
+    /not found/,
+  );
+});
+
+test("planPrompt 自动去重 lessonsLearned", () => {
+  const state = initialState("task", "cmd", {});
+  const withLessons = patchState(state, {
+    lessonsLearned: ["禁止用 eval", "禁止用 eval", "  禁止用 eval  ", "加分号"],
+  });
+  const prompt = planPrompt(withLessons);
+  assert.equal((prompt.match(/禁止用 eval/g) || []).length, 1);
+  assert.ok(prompt.includes("加分号"));
+});
+

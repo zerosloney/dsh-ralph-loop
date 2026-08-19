@@ -206,3 +206,7 @@ export default class RalphService extends Service {
     }
   }
 }
+
+export { RalphService, runRalphLoop };
+export * from "./types.js";
+

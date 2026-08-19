@@ -113,23 +113,81 @@ export function formatTestOutput(
 
 /** Assemble the Plan-node prompt: task, current files, latest outcome, lessons. */
 export function planPrompt(state: RalphState): string {
+  const uniqueLessons = Array.from(
+    new Set(state.lessonsLearned.map((l) => l.trim())),
+  ).filter(Boolean);
   const memory =
-    state.lessonsLearned.length > 0
-      ? `\n【历史教训/负向约束】:\n${state.lessonsLearned
+    uniqueLessons.length > 0
+      ? `\n【历史教训/负向约束】:\n${uniqueLessons
           .map((l, i) => `${i + 1}. ${l}`)
           .join("\n")}`
       : "";
   return `任务: ${state.task}\n当前代码: ${JSON.stringify(state.files)}\n上次执行:\n${formatTestOutput(state.executionOutput)}${memory}\n请给出修改方案。`;
 }
 
+/**
+ * Applies a code patch or replaces content directly. Supports:
+ * 1. Direct replacement string
+ * 2. Search & replace structured object: { search: string, replace: string }
+ * 3. Search/replace marker blocks: <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE
+ */
+export function applyContentPatch(
+  original: string,
+  patchOrContent: unknown,
+): string {
+  if (typeof patchOrContent === "string") {
+    // Check for SEARCH/REPLACE block format
+    if (
+      patchOrContent.includes("<<<<<<< SEARCH") &&
+      patchOrContent.includes("=======") &&
+      patchOrContent.includes(">>>>>>> REPLACE")
+    ) {
+      let result = original;
+      const regex =
+        /<<<<<<< SEARCH\r?\n([\s\S]*?)\r?\n=======\r?\n([\s\S]*?)\r?\n>>>>>>> REPLACE/g;
+      let match: RegExpExecArray | null;
+      let applied = false;
+      while ((match = regex.exec(patchOrContent)) !== null) {
+        const search = match[1];
+        const replace = match[2];
+        if (result.includes(search)) {
+          result = result.replace(search, replace);
+          applied = true;
+        } else {
+          throw new Error(
+            `Search block not found in original file: ${search.slice(0, 80)}`,
+          );
+        }
+      }
+      if (!applied) {
+        throw new Error("No matching search block could be applied");
+      }
+      return result;
+    }
+    return patchOrContent;
+  }
+  if (patchOrContent && typeof patchOrContent === "object") {
+    const obj = patchOrContent as Record<string, unknown>;
+    if (typeof obj.search === "string" && typeof obj.replace === "string") {
+      if (!original.includes(obj.search)) {
+        throw new Error(
+          `Search block not found in original file: ${obj.search.slice(0, 80)}`,
+        );
+      }
+      return original.replace(obj.search, obj.replace);
+    }
+  }
+  throw new Error("Invalid file content or patch format");
+}
+
 /** Handle-node code generation prompt: plan in, strict file-JSON out. */
 export function codegenPrompt(plan: string): { system: string; prompt: string } {
   return {
     system:
-      "你是一个代码生成器。只输出一个 JSON 对象：键为文件路径，值为完整文件内容（必须是纯字符串）。不要输出任何其他文本、注释或 markdown 围栏。禁止包裹结构：顶层必须直接是 {文件路径: 内容字符串}，任何嵌套对象都按解析失败处理。",
-    prompt: `根据方案: ${plan}，输出完整代码 JSON: {"path": "content"}。
+      "你是一个代码生成器。只输出一个 JSON 对象：键为文件路径，值为完整文件内容或增量补丁（字符串或 {search, replace} 对象）。不要输出任何其他文本、注释或 markdown 围栏。禁止包裹结构：顶层必须直接是 {文件路径: 内容}。",
+    prompt: `根据方案: ${plan}，输出代码 JSON: {"path": "content"} 或 {"path": {"search": "old", "replace": "new"}}。
 正确: {"src/main.py": "print('hi')"}
-错误: {"files": {"src/main.py": "print('hi')"}}（多了包裹层）、{"src/main.py": {"content": "print('hi')"}}（值不是字符串）`,
+错误: {"files": {"src/main.py": "print('hi')"}}（多了包裹层）`,
   };
 }
 

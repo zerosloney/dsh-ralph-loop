@@ -10,6 +10,7 @@ import {
   DEFAULT_MAX_CYCLES,
   DEFAULT_TOTAL_TIMEOUT_MS,
   MAX_CYCLES_CAP,
+  applyContentPatch,
   codegenPrompt,
   initialState,
   learnPrompt,
@@ -246,14 +247,20 @@ async function nodeHandle(
       : {};
     let appliedEntries = 0;
     for (const [filePath, content] of Object.entries(entries)) {
-      if (typeof content !== "string") continue;
-      updatedFiles[filePath] = content;
-      appliedEntries += 1;
+      if (typeof content !== "string" && (typeof content !== "object" || content === null)) continue;
+      const original = state.files[filePath] ?? "";
+      try {
+        const updated = applyContentPatch(original, content);
+        updatedFiles[filePath] = updated;
+        appliedEntries += 1;
+      } catch (patchErr) {
+        throw new Error(`文件 "${filePath}" 补丁应用失败: ${(patchErr as Error).message}`);
+      }
     }
-    // 形状完全不对（嵌套值/空对象/非对象顶层）时若继续，会用旧文件跑测试，Reflect
+    // 形状完全不对（空对象/非对象顶层）时若继续，会用旧文件跑测试，Reflect
     // 看不到任何"JSON 形状错了"的反馈，白烧一个周期——按解析失败进入自愈。
     if (appliedEntries === 0) {
-      throw new Error("generated JSON has no {path: content}-shaped file entries");
+      throw new Error("generated JSON has no valid file entries or patches");
     }
   } catch (error) {
     signal?.throwIfAborted();
