@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "RALPH cognitive-loop plugin for DeepSeek Harness: Reflect → Assess → Learn → Plan → Handle autonomous code-generation and error-repair state machine with a hard cycle cap and event-sourced observability.",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "files": [
     "lib/",
