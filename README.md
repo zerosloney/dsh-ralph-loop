@@ -33,15 +33,14 @@ Plan ➔ Handle（写文件 + 跑测试）➔ Reflect（根因分析）➔ Asses
 
 ## 安装
 
-```sh
-# 发布后
-dsh plugin --profile web add dsh-ralph-loop
+插件已发布到 npm registry（`dsh-ralph-loop`，随 `v*` tag 由 CI 自动发布）。在 DeepSeek Harness 中通过 npm 包路径安装——`dsh plugin add` 会安装依赖并自动把包名追加到 profile 的 `dsh.profile.bundles`：
 
-# 本地开发（file: 链接）
-# 在 $DSH_HOME/profiles/<name>/package.json 加依赖并安装
+```sh
+dsh plugin add --profile web dsh-ralph-loop
+dsh --profile web --dump-config          # 确认 ralph-loop 行已组合
 ```
 
-profile 的 `dsh.profile.bundles` 需要包含 `dsh-ralph-loop`；插件依赖 Harness 的 `llm` / `tools` / `subprocess` / `sandbox` 服务（通常由 base bundle 提供）。宿主 profile 必须挂载可用的 Sandbox provider；`dsh-ralph-loop` 不自带 `dsh-sandbox-local`。
+profile 的 `dsh.profile.bundles` 需要包含 `dsh-ralph-loop`；插件依赖 Harness 的 `llm` / `tools` / `subprocess` / `sandbox` 服务（通常由 base bundle 提供）。宿主 profile 必须挂载可用的 Sandbox provider；`dsh-ralph-loop` 不自带 `dsh-sandbox-local`。升级到新版本：`dsh plugin add --profile web dsh-ralph-loop@latest`。
 
 ## 工具（`ctx.tools`）
 
