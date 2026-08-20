@@ -104,7 +104,6 @@ export async function runRalphLoop(
       },
       Math.min(remaining, MAX_TIMER_DELAY_MS),
     );
-    deadlineTimer.unref();
   };
 
   try {
